@@ -22,23 +22,17 @@
 
 #define PPSUnLock   __builtin_write_OSCCONL(OSCCON & 0xBF)
 #define PPSLock     __builtin_write_OSCCONL(OSCCON | 0x40)
-
-volatile unsigned int z;
-volatile unsigned int y;
     
 //How long to read from mic 5000ms = 5s
 #define SAMPLE_TIME		5000
 
 unsigned int counter = 0;
 unsigned int gWord[SAMPLE_TIME];
+unsigned int dacBuf[SAMPLE_TIME];
 	
-unsigned int isRecording = 1;
-unsigned int isPlaybackStart = 1;
-unsigned int isPlayback = 1;
-unsigned int replayCount = 0;
-    
 unsigned int delayLimit = 60;    
-unsigned int replayLimit = 3;
+
+unsigned int playDac = 0;
 
 
 void delay(int limit1, int limit2){
@@ -51,31 +45,18 @@ void delay(int limit1, int limit2){
 
 /*
  *	ISR For Right Channel DAC
- *		TODO: When does this interrupt activate?
- *		
+ *	Interrupt will constantly activate
+ *	However, it'll only function when flag is active
  */
 void __attribute__((interrupt, no_auto_psv))_DAC1RInterrupt(void){
 	IFS4bits.DAC1RIF = 0;		//Clear Right Channel Interrupt Flag
 	
-	//Only intake data when not recording	
-	if(isRecording == 0){	//Only activate when not recording	
-		if(isPlaybackStart == 1){
-			//LATAbits.LATA2 = 1;		//RA2	p30
-			//LATAbits.LATA1 = 1;		//GREEN
-			//Entering the playback stage
-			isPlayback = 1;
-		}
-		//How to handle out of bounds?
-		DAC1RDAT = gWord[counter];
+	if(playDac == 1){
+		DAC1RDAT = dacBuf[counter];
 		counter = counter + 1;
-		if(counter >= SAMPLE_TIME - 10){	//Only when all of the array has been pushed out
-			replayCount++;
+		if(counter >= SAMPLE_TIME - 10){
 			counter = 0;
-			//LATAbits.LATA1 = 0;		//GREEN			
-			//LATAbits.LATA2 = 0;		//RA2	p30
-			//Handle control logic outside of ISR
-			isPlaybackStart = 0;
-			isPlayback = 0;
+			playDac = 0;
 		}	
 	}	
 }
@@ -384,13 +365,35 @@ void play()//read data
 	LATBbits.LATB5=1;
 }
 
+void playMicData(){
+	unsigned int i = 0;
+		
+	Read_Status_Reg();//Read status register
+	LATBbits.LATB5=0;
+	SPI_Transmit(0x03);//Read opcode
+	SPI_Transmit(0x02);//3-byte start address
+	SPI_Transmit(0x00);
+	SPI_Transmit(0x00);
+	while(SPI_Receive()!=0xFF)//Read all the data that was written until we reach the area of memory that is clear
+	{
+		//Fetch 8 bit data from memory twice, store into 16 bit element
+		dacBuf[i] = ((SPI_Receive() << 8) | (SPI_Receive()));
+		i = i + 1;
+	}
+	//All of the flash data has been pushed to DAC buffer array, signal to push to DAC
+	playDac = 1;
+	LATBbits.LATB5=1;
+}
+
 void getMicData(){
     unsigned int i, Delay;
 	
 	for(i = 0; i < SAMPLE_TIME; i++){		
 		LATBbits.LATB6 = 0;					//Turn ON SS pin
 		//gWord[i] = (SPI_Receive() << 4);	//Intake data from SPI bus
-		gWord[i] = ((SPI_Receive() << 8) | (SPI_Receive())) << 4; //Is 4 bit shift even necessary?
+		//Receive 16 bit data in 8 bit mode...
+		//Store two 8 bit data into 16 bit element
+		gWord[i] = ((SPI_Receive() << 8) | (SPI_Receive())) << 4;
 		LATBbits.LATB6 = 1;					//Turn OFF SS pin
 		//What does this delay do?
 		for(Delay = 0; Delay < delayLimit; Delay++);
@@ -442,7 +445,8 @@ int main(void) {
 		
 		if(PORTAbits.RA1 == 1){	//Play button is pressed
 			exit_record();		//Function to exit AAI
-			play();				//Function to read data from flash memory
+			playMicData();		//Function to read microphone data from flash memory
+			//play();				//Function to read data from flash memory
 		}
 		else{					//Play button is not pressed
 			LATAbits.LATA3 = 0;	//Green LED off
