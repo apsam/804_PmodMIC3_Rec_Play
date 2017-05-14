@@ -36,6 +36,9 @@ unsigned int isRecording = 1;
 unsigned int isPlaybackStart = 1;
 unsigned int isPlayback = 1;
 unsigned int replayCount = 0;
+    
+unsigned int delayLimit = 60;    
+unsigned int replayLimit = 3;
 
 
 void delay(int limit1, int limit2){
@@ -102,7 +105,6 @@ void clockSetup(){
 void spiSetup(){
     SPI1CON1bits.DISSCK = 0;    //SPI1 clock on SCK1 pin is enabled
     SPI1CON1bits.DISSDO = 0;    //SDO1 pin is controlled by module
-    //SPI1CON1bits.MODE16 = 1;    //Communication is word wide (16 bits)
 	SPI1CON1bits.MODE16 = 0;    //Communication is 8 bit wide
     SPI1CON1bits.SMP    = 0;    //Sample input at middle of data output time
     SPI1CON1bits.CKE    = 1;    //Output data changes when SCK goes ACTIVE to IDLE
@@ -127,9 +129,7 @@ void spiSetup(){
     SPI1STATbits.SPIEN  = 1;    //SPI1 module is enabled, SCK1, SDO1 and SS1' are PORT pins
 }
 
-void pinSelect(){
-    PPSUnLock;
-	    
+void pinSelect(){	    
 	PPSUnLock;
     RPOR4bits.RP8R = 8;     //RP8 is an output	for SCK1
     RPINR20bits.SCK1R = 8;  //RP8 is an input	for SCK1
@@ -137,7 +137,7 @@ void pinSelect(){
 	RPOR4bits.RP9R = 7;     //RP9 is an output	for SDO1	
     RPINR20bits.SDI1R = 7;  //RP7 is an input	for SDI1
 	
-	RPOR2bits.RP5R	= 9;	//RP5 output for SS1	for FLASH    
+	RPOR2bits.RP5R	= 9;	//RP5 output for SS1	for MEM    
 	RPOR3bits.RP6R	= 0;    //RP6 output for SS2	for MIC
 
 	RPOR6bits.RP12R	= 0;    //RP12 analog output for DAC1 (DAC1RP)
@@ -150,14 +150,13 @@ void ioSetup(){
     TRISBbits.TRISB8    = 0;    //RB8 output for SCK1               p44    
 	TRISBbits.TRISB9    = 1;    //RB9 output for MOSI               p01
 	TRISBbits.TRISB7	= 1;	//RB7 input  for MISO    
-	TRISBbits.TRISB5	= 0;	//RB5 output for SS1
-	TRISBbits.TRISB6    = 0;    //RB6 output for SS2                p42
+	TRISBbits.TRISB5	= 0;	//RB5 output for SS1 (MEM)
+	TRISBbits.TRISB6    = 0;    //RB6 output for SS2 (MIC)			p42
 	
 	//DAC Pin
 	TRISBbits.TRISB12   = 0;    //RB12 output for DAC1RP            p10
 	TRISBbits.TRISB13   = 0;    //RB13 output for DAC1RN            p11
 
-    //LED Debugging
     AD1PCFGL = 0xFFFF;          //AN0-AN8 are now GPIO
 	
 	//Button inputs
@@ -171,13 +170,13 @@ void ioSetup(){
 	TRISAbits.TRISA8=0; //Pin RA8 is assigned as output for Yellow LED
 	
 	//Debug
-	TRISAbits.TRISA7 = 0; //Output debug led for record
+	TRISAbits.TRISA7 = 0; //RA7 output debug LED
 }
 
 void setupDAC(){
     //Configure DAC
-	//Status Register:
-    DAC1STAT = 0;				//Set status of both DAC1RDAT and DAC1LDAT to be EMPTY
+	//Status Register
+    DAC1STAT = 0;
 	
 	//Enabling right channel
     DAC1STATbits.ROEN   = 1;
@@ -202,7 +201,7 @@ void setupDAC(){
 	
 	//Enable interrupts
 	IEC4bits.DAC1RIE = 1;
-	//DAC1RDAT = 0; //?
+	//DAC1RDAT = 0; //Some data is required to initialize interrupts?
 
 	DAC1CONbits.AMPON = 0;
 	    
@@ -280,91 +279,124 @@ unsigned char Read_Byte (unsigned char command, long int address)
 
 void clear_memory()
 {
-            //Process to clear FLASH memory
-            LATAbits.LATA8=1;   //Yellow LED on
-            LATBbits.LATB5=0;  //Lower SS for instruction delivery
-            SPI_Transmit(0x50);//Enable-Write_Status-Register opcode
-            LATBbits.LATB5=1;  //Raise SS for instruction completion
-        
-            LATBbits.LATB5=0;  //Lower SS for instruction delivery
-            SPI_Transmit(0x01);//Write-Status-Register opcode
-            SPI_Transmit(0x00);//Status Register:0x00
-                               //Must set BP2,BP1,BP0 to 0 in order to take off write protect
-            LATBbits.LATB5=1;
-    
-            LATBbits.LATB5=0;
-            SPI_Transmit(0x05);//Read status register Opcode
-            SPI_Receive();     //Read status register
-            LATBbits.LATB5=1;
-    
+	//Process to clear FLASH memory
+	LATAbits.LATA8=1;   //Yellow LED on
+	LATBbits.LATB5=0;  //Lower SS for instruction delivery
+	SPI_Transmit(0x50);//Enable-Write_Status-Register opcode
+	LATBbits.LATB5=1;  //Raise SS for instruction completion
 
-            WREN();
-            LATBbits.LATB5=0;
-            SPI_Transmit(0xC7);//Opcode for chip erase
-            LATBbits.LATB5=1;
-    
-            while((Read_Status_Reg() & 0x01) == 0x01);//Wait for memory to be clear
-    
-            Read_Byte(0x03,0x020000);//Check when data is 0xFF
-    
-            Read_Status_Reg();            
-            delay(100,1000);
-            LATAbits.LATA8=0;   //Yellow LED off
-            LATAbits.LATA2=1;   //Red LED on
-            LATAbits.LATA3=1;   //Green LED on
-            delay(100,100);
+	LATBbits.LATB5=0;  //Lower SS for instruction delivery
+	SPI_Transmit(0x01);//Write-Status-Register opcode
+	SPI_Transmit(0x00);//Status Register:0x00
+					   //Must set BP2,BP1,BP0 to 0 in order to take off write protect
+	LATBbits.LATB5=1;
+
+	LATBbits.LATB5=0;
+	SPI_Transmit(0x05);//Read status register Opcode
+	SPI_Receive();     //Read status register
+	LATBbits.LATB5=1;
+
+
+	WREN();
+	LATBbits.LATB5=0;
+	SPI_Transmit(0xC7);//Opcode for chip erase
+	LATBbits.LATB5=1;
+
+	while((Read_Status_Reg() & 0x01) == 0x01);//Wait for memory to be clear
+
+	Read_Byte(0x03,0x020000);//Check when data is 0xFF
+
+	Read_Status_Reg();            
+	delay(100,1000);
+	LATAbits.LATA8=0;   //Yellow LED off
+	LATAbits.LATA2=1;   //Red LED on
+	LATAbits.LATA3=1;   //Green LED on
+	delay(100,100);
 }
-void setup()
+void flash_setup()
 {
-            WREN();
-            while((Read_Status_Reg() & 0x02)==0x00);//While WEL=0 keep reading the status register Read_Status_Reg();
-            LATBbits.LATB5=0;
-            SPI_Transmit(0xAD);//AAI Word Program instruction opcode
-            SPI_Transmit(0x02);//Address 0x020000
-            SPI_Transmit(0x00);
-            SPI_Transmit(0x00);
-            SPI_Transmit(0xAB);//Word Byte Data: 0xABCD//This will be junk
-            SPI_Transmit(0xCD);
-            LATBbits.LATB5=1;
-            while((Read_Status_Reg()& 0x01) == 0x01);//Polling Busy bit in the status register
-            
-            LATAbits.LATA8=1;   //Yellow LED on
-            LATAbits.LATA2=0;   //Red LED off
-            LATAbits.LATA3=0;   //Green LED off
-            delay(100,1000);
+	WREN();
+	while((Read_Status_Reg() & 0x02)==0x00);//While WEL=0 keep reading the status register Read_Status_Reg();
+	LATBbits.LATB5=0;
+	SPI_Transmit(0xAD);//AAI Word Program instruction opcode
+	SPI_Transmit(0x02);//Address 0x020000
+	SPI_Transmit(0x00);
+	SPI_Transmit(0x00);
+	SPI_Transmit(0xAB);//Word Byte Data: 0xABCD//This will be junk
+	SPI_Transmit(0xCD);
+	LATBbits.LATB5=1;
+	while((Read_Status_Reg()& 0x01) == 0x01);//Polling Busy bit in the status register
+
+	LATAbits.LATA8=1;   //Yellow LED on
+	LATAbits.LATA2=0;   //Red LED off
+	LATAbits.LATA3=0;   //Green LED off
+	delay(100,1000);
 }
 void record()
 {
-            LATAbits.LATA2=1;   //Red LED on
-            while((Read_Status_Reg()& 0x01) == 0x01);//Polling Busy bit in the status register
-    
-            LATBbits.LATB5=0;
-            SPI_Transmit(0xAD);//AAI opcode
-            SPI_Transmit(0xEF);//Word Byte Data: 0xEFBA Actual Data
-            SPI_Transmit(0xBA);
-            LATBbits.LATB5=1;
+	LATAbits.LATA2=1;   //Red LED on
+	while((Read_Status_Reg()& 0x01) == 0x01);//Polling Busy bit in the status register
+
+	LATBbits.LATB5=0;
+	SPI_Transmit(0xAD);//AAI opcode
+	SPI_Transmit(0xEF);//Word Byte Data: 0xEFBA Actual Data
+	SPI_Transmit(0xBA);
+	LATBbits.LATB5=1;
 }
+
+void recordMicData(){	
+	unsigned int i;
+	
+	LATAbits.LATA2=1;   //Red LED on
+	while((Read_Status_Reg()& 0x01) == 0x01);//Polling Busy bit in the status register
+
+	LATBbits.LATB5=0;
+	SPI_Transmit(0xAD);//AAI opcode
+	//Loop through the collected samples
+	for(i = 0; i < SAMPLE_TIME; i++){
+		//Each element is 16 bits, split into two 8 bits and transfer out
+		SPI_Transmit((gWord[i] >> 8) & 0xFF);	//High
+		SPI_Transmit((gWord[i] >> 0) & 0xFF);	//Low
+	}
+	LATBbits.LATB5=1;
+}
+
 void exit_record()
 {
-            LATAbits.LATA3=1;   //Green LED on
-            
-            LATBbits.LATB5=0;    
-            SPI_Transmit(0x04);//Opcode WRDI to exit AAI Mode
-            LATBbits.LATB5=1;
+	LATAbits.LATA3=1;   //Green LED on
+
+	LATBbits.LATB5=0;    
+	SPI_Transmit(0x04);//Opcode WRDI to exit AAI Mode
+	LATBbits.LATB5=1;
 }
 void play()//read data
 {
-            Read_Status_Reg();//Read status register
-            LATBbits.LATB5=0;
-            SPI_Transmit(0x03);//Read opcode
-            SPI_Transmit(0x02);//3-byte start address
-            SPI_Transmit(0x00);
-            SPI_Transmit(0x00);
-            while(SPI_Receive()!=0xFF)//Read all the data that was written until we reach the area of memory that is clear
-            {
-                SPI_Receive();
-            }
-            LATBbits.LATB5=1;
+	Read_Status_Reg();//Read status register
+	LATBbits.LATB5=0;
+	SPI_Transmit(0x03);//Read opcode
+	SPI_Transmit(0x02);//3-byte start address
+	SPI_Transmit(0x00);
+	SPI_Transmit(0x00);
+	while(SPI_Receive()!=0xFF)//Read all the data that was written until we reach the area of memory that is clear
+	{
+		SPI_Receive();
+	}
+	LATBbits.LATB5=1;
+}
+
+void getMicData(){
+    unsigned int i, Delay;
+	
+	for(i = 0; i < SAMPLE_TIME; i++){		
+		LATBbits.LATB6 = 0;					//Turn ON SS pin
+		//gWord[i] = (SPI_Receive() << 4);	//Intake data from SPI bus
+		gWord[i] = ((SPI_Receive() << 8) | (SPI_Receive())) << 4; //Is 4 bit shift even necessary?
+		LATBbits.LATB6 = 1;					//Turn OFF SS pin
+		//What does this delay do?
+		for(Delay = 0; Delay < delayLimit; Delay++);
+	}
+	//Put something in the DAC FIFO to activate interrupts?	
+	DAC1RDAT = 0x1111;
 }
 
 
@@ -377,10 +409,6 @@ void play()//read data
  *		0x0000		Minimum output voltage
  */
 int main(void) {
-    unsigned int i, Delay;
-    unsigned int delayLimit = 60;
-    unsigned int replayLimit = 3;
-
 	//Setups
     clockSetup();
     spiSetup();
@@ -388,51 +416,39 @@ int main(void) {
     ioSetup();
     setupDAC();
     
-	//Debug LEDS
+	//Debug LED
     LATAbits.LATA7 = 0;
 	
-    i = 0;
-    while(1){
-		//Record for some predetermined time length
-		if(isRecording){
-			//Recording
-			LATAbits.LATA7 = 1;
-			//What does this delay do?
-			delay(400, 400);
-			// Record for some length of time, feed contents into global array
-			for(i = 0; i < SAMPLE_TIME; i++){		
-				LATBbits.LATB6 = 0;					//Turn ON SS pin
-				//gWord[i] = (SPI_Receive() << 4);	//Intake data from SPI bus
-
-				gWord[i] = ((SPI_Receive() << 8) | (SPI_Receive())) << 4;
-				LATBbits.LATB6 = 1;					//Turn OFF SS pin
-				//What does this delay do?
-				for(Delay = 0; Delay < delayLimit; Delay++);
-			}
-			//No longer recording
-			isRecording = 0;
-			//Not Recording
-			LATAbits.LATA7 = 0;	
-			//Start the playback
-			isPlaybackStart = 1;
-			
-			//Put something in the FIFO to activate the interrupts?
-				//TODO: Adjust interrupt config in setupDAC()
-			DAC1RDAT = 0x1111;
+	while(1){
+		//Press erase button and wait for LED to turn off
+		//When the LED goes from ON to OFF, this indicates that the memory is cleared
+		if(PORTAbits.RA4 == 1){	//Erase button is pressed
+			clear_memory();
+			flash_setup();
 		}
-		//USE INTERRUPTS INSTEAD OF STATUS REGISTER*********************
-		//Toggle debug LED to visualize steps...
+		else{					//Erase button is not pressed
+			LATAbits.LATA8 = 0;	//Yellow LED off
+		}
 		
-		if(replayCount >= replayLimit){
-			//Restart the process
-			isRecording = 1;
-			replayCount = 0;
-        }
-    }
+		//Press and Hold Record button
+		if(PORTAbits.RA0 == 1){	//Record button is pressed
+			getMicData();		//Obtain data from microphone
+			recordMicData();	//Write microphone data onto memory
+			//record();			//Write data onto flash memory
+		}
+		else{					//Record button not pressed
+			LATAbits.LATA2 = 0;	//Red LED off
+		}
+		
+		if(PORTAbits.RA1 == 1){	//Play button is pressed
+			exit_record();		//Function to exit AAI
+			play();				//Function to read data from flash memory
+		}
+		else{					//Play button is not pressed
+			LATAbits.LATA3 = 0;	//Green LED off
+		}
+	}
     	
-	//Adding this while statement will cause main() to loop infinitely thus only running once.
-	//while(1);
-	
 	//Remove return otherwise main() will infinite loop
     //return 0;
 }
