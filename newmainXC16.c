@@ -53,24 +53,6 @@ void delay(int limit1, int limit2){
  */
 void __attribute__((interrupt, no_auto_psv))_DAC1RInterrupt(void){
 	IFS4bits.DAC1RIF = 0;		//Clear Right Channel Interrupt Flag
-	/*
-	//Ping pong between the two statements as the FIFO is NOT FULL
-	if(z == 0){
-		z = 1;
-		//0xFFFF	2.34V
-		//0x8FFF	1.79V
-		//0x8000	1.73V
-		//0x1111	1.18V
-		//0x0000	1.09V
-		//DAC1RDAT = 0xFFFF;
-		DAC1RDAT = gWord[counter];
-	}
-	else{
-		z = 0;
-		//DAC1RDAT = 0x1111;
-		DAC1RDAT = 0x0000;
-	}
-	*/
 	
 	//Only intake data when not recording	
 	if(isRecording == 0){	//Only activate when not recording	
@@ -131,7 +113,8 @@ void clockSetup(){
 void spiSetup(){
     SPI1CON1bits.DISSCK = 0;    //SPI1 clock on SCK1 pin is enabled
     SPI1CON1bits.DISSDO = 0;    //SDO1 pin is controlled by module
-    SPI1CON1bits.MODE16 = 1;    //Communication is word wide (16 bits)
+    //SPI1CON1bits.MODE16 = 1;    //Communication is word wide (16 bits)
+	SPI1CON1bits.MODE16 = 0;    //Communication is 8 bit wide
     SPI1CON1bits.SMP    = 0;    //Sample input at middle of data output time
     SPI1CON1bits.CKE    = 1;    //Output data changes when SCK goes ACTIVE to IDLE
     SPI1CON1bits.SSEN   = 0;    //Slave select pin is controlled by PORT function
@@ -147,7 +130,8 @@ void spiSetup(){
 	//Primary prescale bits		64:1
     SPI1CON1bits.PPRE   = 0;    //Primary SPI clock = 9.21/64 = 143.9KHz
 	//Secondary prescale bits	3:1
-    SPI1CON1bits.SPRE   = 5;    //Second SPI clock  = 143.9/3 = 48KHz 
+    //SPI1CON1bits.SPRE   = 5;    //Second SPI clock  = 143.9/3 = 48KHz     
+	SPI1CON1bits.SPRE   = 7;    //Second SPI clock0
 	//SCK = 48KHz
     
     SPI1STATbits.SPIROV = 0;    //Clear initial overflow bit 
@@ -268,7 +252,9 @@ int main(void) {
 			// Record for some length of time, feed contents into global array
 			for(i = 0; i < SAMPLE_TIME; i++){		
 				LATBbits.LATB6 = 0;					//Turn ON SS pin
-				gWord[i] = (SPI_Receive() << 4);	//Intake data from SPI bus
+				//gWord[i] = (SPI_Receive() << 4);	//Intake data from SPI bus
+
+				gWord[i] = ((SPI_Receive() << 8) | (SPI_Receive())) << 4;
 				LATBbits.LATB6 = 1;					//Turn OFF SS pin
 				//What does this delay do?
 				for(Delay = 0; Delay < delayLimit; Delay++);
