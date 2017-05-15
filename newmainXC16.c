@@ -28,11 +28,13 @@
 
 unsigned int counter = 0;
 unsigned int gWord[SAMPLE_TIME];
-unsigned int dacBuf[SAMPLE_TIME];
+//unsigned int dacBuf[SAMPLE_TIME]; //Error during compiling?
 	
 unsigned int delayLimit = 60;    
 
 unsigned int playDac = 0;
+
+unsigned int prevRecord = 0;
 
 
 void delay(int limit1, int limit2){
@@ -52,7 +54,8 @@ void __attribute__((interrupt, no_auto_psv))_DAC1RInterrupt(void){
 	IFS4bits.DAC1RIF = 0;		//Clear Right Channel Interrupt Flag
 	
 	if(playDac == 1){
-		DAC1RDAT = dacBuf[counter];
+		//DAC1RDAT = dacBuf[counter];		
+		DAC1RDAT = gWord[counter];
 		counter = counter + 1;
 		if(counter >= SAMPLE_TIME - 10){
 			counter = 0;
@@ -325,23 +328,6 @@ void record()
 	LATBbits.LATB5=1;
 }
 
-void recordMicData(){	
-	unsigned int i;
-	
-	LATAbits.LATA2=1;   //Red LED on
-	while((Read_Status_Reg()& 0x01) == 0x01);//Polling Busy bit in the status register
-
-	LATBbits.LATB5=0;
-	SPI_Transmit(0xAD);//AAI opcode
-	//Loop through the collected samples
-	for(i = 0; i < SAMPLE_TIME; i++){
-		//Each element is 16 bits, split into two 8 bits and transfer out
-		SPI_Transmit((gWord[i] >> 8) & 0xFF);	//High
-		SPI_Transmit((gWord[i] >> 0) & 0xFF);	//Low
-	}
-	LATBbits.LATB5=1;
-}
-
 void exit_record()
 {
 	LATAbits.LATA3=1;   //Green LED on
@@ -377,11 +363,29 @@ void playMicData(){
 	while(SPI_Receive()!=0xFF)//Read all the data that was written until we reach the area of memory that is clear
 	{
 		//Fetch 8 bit data from memory twice, store into 16 bit element
-		dacBuf[i] = ((SPI_Receive() << 8) | (SPI_Receive()));
+		//dacBuf[i] = ((SPI_Receive() << 8) | (SPI_Receive()));
+		gWord[i] = ((SPI_Receive() << 8) | (SPI_Receive()));
 		i = i + 1;
 	}
 	//All of the flash data has been pushed to DAC buffer array, signal to push to DAC
 	playDac = 1;
+	LATBbits.LATB5=1;
+}
+
+void recordMicData(){	
+	unsigned int i;
+	
+	LATAbits.LATA2=1;   //Red LED on
+	while((Read_Status_Reg()& 0x01) == 0x01);//Polling Busy bit in the status register
+
+	LATBbits.LATB5=0;
+	SPI_Transmit(0xAD);//AAI opcode
+	//Loop through the collected samples
+	for(i = 0; i < SAMPLE_TIME; i++){
+		//Each element is 16 bits, split into two 8 bits and transfer out
+		SPI_Transmit((gWord[i] >> 8) & 0xFF);	//High
+		SPI_Transmit((gWord[i] >> 0) & 0xFF);	//Low
+	}
 	LATBbits.LATB5=1;
 }
 
@@ -400,6 +404,64 @@ void getMicData(){
 	}
 	//Put something in the DAC FIFO to activate interrupts?	
 	DAC1RDAT = 0x1111;
+}
+
+void getMicDataInf(int elem){
+	LATBbits.LATB6 = 0;	//SS Mic on
+	gWord[elem] = ((SPI_Receive() << 8) | (SPI_Receive())) << 4;
+	LATBbits.LATB6 = 1;	//SS Mic off
+}
+
+void playMicDataInf(int sampleSize){
+	unsigned int i = 0;
+		
+	Read_Status_Reg();//Read status register
+	LATBbits.LATB5=0;
+	SPI_Transmit(0x03);//Read opcode
+	SPI_Transmit(0x02);//3-byte start address
+	SPI_Transmit(0x00);
+	SPI_Transmit(0x00);
+	while(SPI_Receive()!=0xFF)//Read all the data that was written until we reach the area of memory that is clear
+	{
+		//Fetch 8 bit data from memory twice, store into 16 bit element
+		//dacBuf[i] = ((SPI_Receive() << 8) | (SPI_Receive()));
+		gWord[i] = ((SPI_Receive() << 8) | (SPI_Receive()));
+		i = i + 1;
+	}
+	//All of the flash data has been pushed to DAC buffer array, signal to push to DAC
+	playDac = 1;
+	LATBbits.LATB5=1;
+}
+
+void recordMicDataInf(int elem){	
+	LATAbits.LATA2=1;   //Red LED on
+	while((Read_Status_Reg()& 0x01) == 0x01);//Polling Busy bit in the status register
+
+	LATBbits.LATB5=0;
+	SPI_Transmit(0xAD);//AAI opcode
+	//Loop through the collected samples
+	
+	SPI_Transmit((gWord[elem] >> 8) & 0xFF);	//High	
+	SPI_Transmit((gWord[elem] >> 0) & 0xFF);	//Low
+	
+	LATBbits.LATB5=1;
+}
+
+void recordArrMem(int sampleTime){	
+	unsigned int i;
+	
+	LATAbits.LATA2=1;   //Red LED on
+	while((Read_Status_Reg()& 0x01) == 0x01);//Polling Busy bit in the status register
+
+	LATBbits.LATB5=0;
+	SPI_Transmit(0xAD);//AAI opcode
+	//Loop through the collected samples
+	for(i = 0; i < sampleTime; i++){
+		//Each element is 16 bits, split into two 8 bits and transfer out
+		SPI_Transmit((gWord[i] >> 8) & 0xFF);	//High
+		SPI_Transmit((gWord[i] >> 0) & 0xFF);	//Low
+	}
+	LATBbits.LATB5=1;
 }
 
 
@@ -422,6 +484,10 @@ int main(void) {
 	//Debug LED
     LATAbits.LATA7 = 0;
 	
+	unsigned int recordCount = 0;
+	
+	//DAC1RDAT = 0x1111;	//Junk to trigger the DAC interrupts
+	
 	while(1){
 		//Press erase button and wait for LED to turn off
 		//When the LED goes from ON to OFF, this indicates that the memory is cleared
@@ -435,17 +501,26 @@ int main(void) {
 		
 		//Press and Hold Record button
 		if(PORTAbits.RA0 == 1){	//Record button is pressed
-			getMicData();		//Obtain data from microphone
-			recordMicData();	//Write microphone data onto memory
+			//getMicData();		//Obtain data from microphone
+			getMicDataInf(recordCount);		//Get single mic reading
+			recordMicDataInf(recordCount);	//Store single mic reading to mem
+			recordCount = recordCount + 1;
+			//recordMicData();	//Write microphone data onto memory
 			//record();			//Write data onto flash memory
+			//prevRecord = 1;
 		}
 		else{					//Record button not pressed
 			LATAbits.LATA2 = 0;	//Red LED off
+			/*if(prevRecord){
+				recordArrMem(recordCount);
+				prevRecord = 0;
+			}*/
 		}
 		
 		if(PORTAbits.RA1 == 1){	//Play button is pressed
 			exit_record();		//Function to exit AAI
-			playMicData();		//Function to read microphone data from flash memory
+			//playMicData();		//Function to read microphone data from flash memory
+			playMicDataInf();
 			//play();				//Function to read data from flash memory
 		}
 		else{					//Play button is not pressed
