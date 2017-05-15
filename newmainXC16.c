@@ -36,6 +36,9 @@ unsigned int playDac = 0;
 
 unsigned int prevRecord = 0;
 
+int rec_count = 0;
+int play_count = 0;
+
 
 void delay(int limit1, int limit2){
     unsigned int i, j;
@@ -290,7 +293,7 @@ void clear_memory()
 
 	Read_Byte(0x03,0x020000);//Check when data is 0xFF
 
-	Read_Status_Reg();            
+	//Read_Status_Reg();            
 	delay(100,1000);
 	LATAbits.LATA8=0;   //Yellow LED off
 	LATAbits.LATA2=1;   //Red LED on
@@ -326,6 +329,7 @@ void record()
 	SPI_Transmit(0xEF);//Word Byte Data: 0xEFBA Actual Data
 	SPI_Transmit(0xBA);
 	LATBbits.LATB5=1;
+	rec_count++;
 }
 
 void exit_record()
@@ -344,10 +348,14 @@ void play()//read data
 	SPI_Transmit(0x02);//3-byte start address
 	SPI_Transmit(0x00);
 	SPI_Transmit(0x00);
-	while(SPI_Receive()!=0xFF)//Read all the data that was written until we reach the area of memory that is clear
+	//while(SPI_Receive()!=0xFF)//Read all the data that was written until we reach the area of memory that is clear
+	while(play_count != (rec_count * 6))
 	{
 		SPI_Receive();
+		play_count++;
+		LATAbits.LATA3 = 1; //Green LED on
 	}
+	LATAbits.LATA3 = 0; //Green LED off
 	LATBbits.LATB5=1;
 }
 
@@ -421,12 +429,15 @@ void playMicDataInf(int sampleSize){
 	SPI_Transmit(0x02);//3-byte start address
 	SPI_Transmit(0x00);
 	SPI_Transmit(0x00);
-	while(SPI_Receive()!=0xFF)//Read all the data that was written until we reach the area of memory that is clear
+	//while(SPI_Receive()!=0xFF)//Read all the data that was written until we reach the area of memory that is clear
+	while(play_count != (rec_count * 6))
 	{
 		//Fetch 8 bit data from memory twice, store into 16 bit element
 		//dacBuf[i] = ((SPI_Receive() << 8) | (SPI_Receive()));
 		gWord[i] = ((SPI_Receive() << 8) | (SPI_Receive()));
 		i = i + 1;
+		//Increment play counter duration
+		play_count++;
 	}
 	//All of the flash data has been pushed to DAC buffer array, signal to push to DAC
 	playDac = 1;
@@ -445,6 +456,8 @@ void recordMicDataInf(int elem){
 	SPI_Transmit((gWord[elem] >> 0) & 0xFF);	//Low
 	
 	LATBbits.LATB5=1;
+	//One sample has been stored in memory, increment count
+	rec_count++;
 }
 
 void recordArrMem(int sampleTime){	
